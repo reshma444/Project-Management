@@ -1,0 +1,116 @@
+package view;
+
+import java.awt.Color;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import javax.swing.JOptionPane;
+import projectman.DBConnection;
+import view.Admin_Form;
+import view.user_Form;
+
+public class LoginForm extends javax.swing.JFrame {
+
+    private static final String PLACEHOLDER_USERNAME = "Username";
+    private static final String PLACEHOLDER_PASSWORD = "Password";
+
+    public LoginForm() {
+        initComponents();
+        resetPlaceholders();
+    }
+
+    private void resetPlaceholders() {
+        txtuser.setText(PLACEHOLDER_USERNAME);
+        txtuser.setForeground(Color.GRAY);
+        txtpass.setText(PLACEHOLDER_PASSWORD);
+        txtpass.setForeground(Color.GRAY);
+    }
+
+    public boolean checkLogin(String username, String password, String usertype) {
+        String query = "SELECT userid, usertype FROM multiuserlogin WHERE username = ? AND password = ? AND usertype = ?";
+        try (Connection conn = DBConnection.getConnection(); 
+             PreparedStatement pst = conn.prepareStatement(query)) {
+
+            pst.setString(1, username);
+            pst.setString(2, password);
+            pst.setString(3, usertype);
+
+            try (ResultSet rs = pst.executeQuery()) {
+                if (rs.next()) {
+                    int userId = rs.getInt("userid");
+                    String usertypeFromDB = rs.getString("usertype");
+                    JOptionPane.showMessageDialog(this, "Logged in as " + usertypeFromDB);
+                    
+                    if (usertype.equalsIgnoreCase("Admin")) {
+                        new Admin_Form().setVisible(true);
+                    } else {
+                        new user_Form().setVisible(true);
+                    }
+                    this.setVisible(false);
+                    return true;
+                } else {
+                    JOptionPane.showMessageDialog(this, "Invalid login credentials. Please try again.");
+                }
+            }
+        } catch (Exception e) {
+            JOptionPane.showMessageDialog(this, "Database error: " + e.getMessage());
+            e.printStackTrace();
+        }
+        return false;
+    }
+
+    private void initComponents() {
+        // UI components initialization (unchanged)
+        // Set component properties and add listeners here
+
+        jButton_login.addActionListener(evt -> {
+            String username = txtuser.getText().trim();
+            String password = String.valueOf(txtpass.getPassword()).trim();
+            String usertype = comboUsertype.getSelectedItem().toString();
+
+            if (checkLogin(username, password, usertype)) {
+                System.out.println("Login successful");
+            }
+        });
+
+        txtuser.addFocusListener(new java.awt.event.FocusAdapter() {
+            public void focusGained(java.awt.event.FocusEvent evt) {
+                if (txtuser.getText().equals(PLACEHOLDER_USERNAME)) {
+                    txtuser.setText("");
+                    txtuser.setForeground(Color.BLACK);
+                }
+            }
+
+            public void focusLost(java.awt.event.FocusEvent evt) {
+                if (txtuser.getText().trim().isEmpty()) {
+                    txtuser.setText(PLACEHOLDER_USERNAME);
+                    txtuser.setForeground(Color.GRAY);
+                }
+            }
+        });
+
+        txtpass.addFocusListener(new java.awt.event.FocusAdapter() {
+            public void focusGained(java.awt.event.FocusEvent evt) {
+                if (String.valueOf(txtpass.getPassword()).equals(PLACEHOLDER_PASSWORD)) {
+                    txtpass.setText("");
+                    txtpass.setForeground(Color.BLACK);
+                }
+            }
+
+            public void focusLost(java.awt.event.FocusEvent evt) {
+                if (String.valueOf(txtpass.getPassword()).trim().isEmpty()) {
+                    txtpass.setText(PLACEHOLDER_PASSWORD);
+                    txtpass.setForeground(Color.GRAY);
+                }
+            }
+        });
+    }
+
+    public static void main(String args[]) {
+        java.awt.EventQueue.invokeLater(() -> {
+            new LoginForm().setVisible(true);
+        });
+    }
+
+                   
+}
