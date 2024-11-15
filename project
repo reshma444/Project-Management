@@ -1,0 +1,601 @@
+package view;
+
+import java.awt.Color;
+import javax.swing.*;
+import java.awt.event.ActionEvent;
+import java.awt.event.ActionListener;
+import java.sql.ResultSet;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.util.regex.Pattern;
+import projectman.DBConnection;
+
+
+public class CreateProject_Form extends JFrame {
+
+    
+    public CreateProject_Form() {
+        // Initialize the components
+        initComponents();
+        // Add custom event handlers
+        addEventHandlers();
+    }
+
+    
+    private void addEventHandlers() {
+        if (jButton_submit != null) {
+            jButton_submit.addActionListener(new ActionListener() {
+                @Override
+                public void actionPerformed(ActionEvent e) {
+                    saveProject();
+                }
+            });
+        }
+        if (jButton1 != null) {
+            jButton1.addActionListener(new ActionListener() {
+                @Override
+                public void actionPerformed(ActionEvent e) {
+                    goBack();
+                }
+            });
+        }
+    }
+
+    private void saveProject() {
+        String regNo = txtRegNo.getText();
+        String title = txtTitle.getText();
+        String year = txtYear.getText(); 
+        String category = txtCategory.getSelectedItem().toString();
+        String supervisorName = txtSupervisor.getText();
+        String member = txtMember.getText();
+        String startDate = txtStartDate.getText();
+        String deadline = txtDeadline.getText();
+
+        // Validate input fields
+        if (regNo.isEmpty() || title.isEmpty() || year.isEmpty() || supervisorName.isEmpty() || member.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "Please fill in all fields before saving.");
+            return;
+        }
+
+        if (!isValidDate(startDate) || !isValidDate(deadline)) {
+            JOptionPane.showMessageDialog(this, "Please enter valid dates in the format YYYY-MM-DD.");
+            return;
+        }
+
+        if (!isValidRegNo(regNo)) {
+            JOptionPane.showMessageDialog(this, "Please enter a valid Registration Number in the format A123456-09.");
+            return;
+        }
+
+        if (isTitleExists(title, year, member)) {
+            JOptionPane.showMessageDialog(this, "A project with this title already exists in the selected year.");
+            return;
+        }
+
+        int supId = ensureSupervisorExists(supervisorName);
+        if (supId == -1) {
+            JOptionPane.showMessageDialog(this, "Failed to ensure supervisor exists.");
+            return;
+        }
+
+        String sql = "INSERT INTO project (Title, SupId, startDate, deadline) VALUES (?, ?, ?, ?)";
+
+        try (Connection conn = DBConnection.getConnection(); 
+             PreparedStatement stmt = conn.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
+
+            stmt.setString(1, title);
+            stmt.setInt(2, supId);
+            stmt.setDate(3, java.sql.Date.valueOf(startDate));
+            stmt.setDate(4, java.sql.Date.valueOf(deadline));
+
+            int affectedRows = stmt.executeUpdate();
+
+            if (affectedRows > 0) {
+                try (ResultSet generatedKeys = stmt.getGeneratedKeys()) {
+                    if (generatedKeys.next()) {
+                        int projectId = generatedKeys.getInt(1);
+                        insertStudent(conn, projectId, regNo, category, year, member, supId);
+                        JOptionPane.showMessageDialog(this, "Project Added Successfully! Project ID: " + projectId);
+                    } else {
+                        throw new SQLException("Creating project failed, no ID obtained.");
+                    }
+                }
+            } else {
+                throw new SQLException("Creating project failed, no rows affected.");
+            }
+
+        } catch (SQLException e) {
+            JOptionPane.showMessageDialog(this, "Failed to Add Project: " + e.getMessage());
+        }
+    }
+
+    private boolean isValidDate(String date) {
+        try {
+            java.sql.Date.valueOf(date);
+            return true;
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
+    }
+
+    private boolean isValidRegNo(String regNo) {
+        String REGNO_PATTERN = "^A\\d{6}-\\d{2}$";
+        return Pattern.matches(REGNO_PATTERN, regNo);
+    }
+
+    private boolean isTitleExists(String title, String year, String member) {
+        
+        java.sql.Date currentDate = new java.sql.Date(System.currentTimeMillis());
+        
+        
+        java.sql.Date fiveYearsAgo = new java.sql.Date(System.currentTimeMillis() - 5L * 365 * 24 * 60 * 60 * 1000);
+
+        String sql = "SELECT COUNT(*) FROM project p "
+                   + "JOIN student s ON p.ProjectId = s.ProjectId "
+                   + "WHERE p.Title = ? AND s.Year = ? AND s.Member = ? "
+                   + "AND p.startDate BETWEEN ? AND ?";
+
+        try (Connection conn = DBConnection.getConnection(); 
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+
+            stmt.setString(1, title);
+            stmt.setString(2, year);
+            stmt.setString(3, member);
+            stmt.setDate(4, fiveYearsAgo); 
+            stmt.setDate(5, currentDate);   
+
+            ResultSet rs = stmt.executeQuery();
+
+            if (rs.next()) {
+                return rs.getInt(1) > 0; 
+            }
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+
+        return false;
+    }
+
+    private int getSupervisorId(String supervisorName, Connection conn) {
+        String sql = "SELECT SupId FROM supervisor WHERE Name = ?";
+        try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setString(1, supervisorName);
+            ResultSet rs = stmt.executeQuery();
+            if (rs.next()) {
+                return rs.getInt("SupId");
+            } else {
+                
+                JOptionPane.showMessageDialog(null, "Supervisor not found.");
+                return -1; 
+            }
+        } catch (SQLException e) {
+            e.printStackTrace();
+            return -1;  
+        }
+    }
+
+    private void insertStudent(Connection conn, int projectId, String regNo, String category, String year, String member, int supId) throws SQLException {
+        String sql = "INSERT INTO student (RegNo, Member, SupId, ProjectId, Year, Category) VALUES (?, ?, ?, ?, ?, ?)";
+
+        try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setString(1, regNo);
+            stmt.setString(2, member);
+            stmt.setInt(3, supId);
+            stmt.setInt(4, projectId);
+            stmt.setString(5, year);
+            stmt.setString(6, category); 
+            stmt.executeUpdate();
+        }
+    }
+
+    private int ensureSupervisorExists(String supervisorName) {
+        String selectSql = "SELECT SupId FROM supervisor WHERE Name = ?";
+        String insertSql = "INSERT INTO supervisor (Name) VALUES (?)";
+
+        try (Connection conn = DBConnection.getConnection(); 
+             PreparedStatement selectStmt = conn.prepareStatement(selectSql);
+             PreparedStatement insertStmt = conn.prepareStatement(insertSql, Statement.RETURN_GENERATED_KEYS)) {
+
+            
+            selectStmt.setString(1, supervisorName);
+            ResultSet rs = selectStmt.executeQuery();
+            if (rs.next()) {
+                return rs.getInt("SupId"); 
+            } else {
+                
+                insertStmt.setString(1, supervisorName);
+                int affectedRows = insertStmt.executeUpdate();
+                if (affectedRows > 0) {
+                    try (ResultSet generatedKeys = insertStmt.getGeneratedKeys()) {
+                        if (generatedKeys.next()) {
+                            return generatedKeys.getInt(1); 
+                        } else {
+                            throw new SQLException("Creating supervisor failed, no ID obtained.");
+                        }
+                    }
+                } else {
+                    throw new SQLException("Creating supervisor failed, no rows affected.");
+                }
+            }
+
+        } catch (SQLException e) {
+            e.printStackTrace();
+            return -1; 
+        }
+    }
+
+ 
+    
+    private void goBack() {
+        this.setVisible(false);
+        new user_Form().setVisible(true);
+    }
+   
+    // <editor-fold defaultstate="collapsed" desc="Generated Code">                          
+    private void initComponents() {
+
+        jPanel1 = new javax.swing.JPanel();
+        jPanel2 = new javax.swing.JPanel();
+        jLabel_title = new javax.swing.JLabel();
+        jLabel3 = new javax.swing.JLabel();
+        jLabel_category = new javax.swing.JLabel();
+        jLabel_supervisor = new javax.swing.JLabel();
+        jLabel_member = new javax.swing.JLabel();
+        jLabel_regNo = new javax.swing.JLabel();
+        jLabel_year = new javax.swing.JLabel();
+        txtTitle = new javax.swing.JTextField();
+        txtCategory = new javax.swing.JComboBox<>();
+        txtSupervisor = new javax.swing.JTextField();
+        txtRegNo = new javax.swing.JTextField();
+        txtYear = new javax.swing.JTextField();
+        txtMember = new javax.swing.JTextField();
+        jButton_submit = new javax.swing.JButton();
+        jButton1 = new javax.swing.JButton();
+        jLabel2 = new javax.swing.JLabel();
+        jLabel4 = new javax.swing.JLabel();
+        txtStartDate = new javax.swing.JTextField();
+        txtDeadline = new javax.swing.JTextField();
+        jLabel1 = new javax.swing.JLabel();
+
+        setDefaultCloseOperation(javax.swing.WindowConstants.EXIT_ON_CLOSE);
+
+        jPanel1.setBackground(new java.awt.Color(11, 41, 66));
+
+        jPanel2.setBackground(new java.awt.Color(244, 236, 228));
+
+        jLabel_title.setFont(new java.awt.Font("Segoe UI", 3, 18)); // NOI18N
+        jLabel_title.setForeground(new java.awt.Color(11, 41, 66));
+        jLabel_title.setHorizontalAlignment(javax.swing.SwingConstants.CENTER);
+        jLabel_title.setText("Title:");
+
+        jLabel_category.setFont(new java.awt.Font("Segoe UI", 3, 18)); // NOI18N
+        jLabel_category.setForeground(new java.awt.Color(11, 41, 66));
+        jLabel_category.setHorizontalAlignment(javax.swing.SwingConstants.CENTER);
+        jLabel_category.setText("Category:");
+
+        jLabel_supervisor.setFont(new java.awt.Font("Segoe UI", 3, 18)); // NOI18N
+        jLabel_supervisor.setForeground(new java.awt.Color(11, 41, 66));
+        jLabel_supervisor.setHorizontalAlignment(javax.swing.SwingConstants.CENTER);
+        jLabel_supervisor.setText("Supervisor:");
+
+        jLabel_member.setFont(new java.awt.Font("Segoe UI", 3, 18)); // NOI18N
+        jLabel_member.setForeground(new java.awt.Color(11, 41, 66));
+        jLabel_member.setHorizontalAlignment(javax.swing.SwingConstants.CENTER);
+        jLabel_member.setText("Member:");
+
+        jLabel_regNo.setFont(new java.awt.Font("Segoe UI", 3, 18)); // NOI18N
+        jLabel_regNo.setForeground(new java.awt.Color(11, 41, 66));
+        jLabel_regNo.setHorizontalAlignment(javax.swing.SwingConstants.CENTER);
+        jLabel_regNo.setText("Reg.No:");
+
+        jLabel_year.setFont(new java.awt.Font("Segoe UI", 3, 18)); // NOI18N
+        jLabel_year.setForeground(new java.awt.Color(11, 41, 66));
+        jLabel_year.setHorizontalAlignment(javax.swing.SwingConstants.CENTER);
+        jLabel_year.setText("Year:");
+
+        txtTitle.setCursor(new java.awt.Cursor(java.awt.Cursor.TEXT_CURSOR));
+
+        txtCategory.setModel(new javax.swing.DefaultComboBoxModel<>(new String[] { "CIS", "BRP", "Internship", " " }));
+
+        jButton_submit.setFont(new java.awt.Font("Segoe UI", 1, 14)); // NOI18N
+        jButton_submit.setForeground(new java.awt.Color(11, 41, 66));
+        jButton_submit.setText("SUBMIT");
+        jButton_submit.setCursor(new java.awt.Cursor(java.awt.Cursor.HAND_CURSOR));
+        jButton_submit.addActionListener(new java.awt.event.ActionListener() {
+            public void actionPerformed(java.awt.event.ActionEvent evt) {
+                jButton_submitActionPerformed(evt);
+            }
+        });
+
+        jButton1.setFont(new java.awt.Font("Segoe UI", 1, 12)); // NOI18N
+        jButton1.setText("Go Back");
+        jButton1.addActionListener(new java.awt.event.ActionListener() {
+            public void actionPerformed(java.awt.event.ActionEvent evt) {
+                jButton1ActionPerformed(evt);
+            }
+        });
+
+        jLabel2.setFont(new java.awt.Font("Segoe UI", 3, 18)); // NOI18N
+        jLabel2.setForeground(new java.awt.Color(11, 41, 66));
+        jLabel2.setText("StartDate:");
+
+        jLabel4.setFont(new java.awt.Font("Segoe UI", 3, 18)); // NOI18N
+        jLabel4.setForeground(new java.awt.Color(11, 41, 66));
+        jLabel4.setText("EndDate:");
+
+        txtStartDate.setText("YYYY-MM-DD");
+        txtStartDate.addFocusListener(new java.awt.event.FocusAdapter() {
+            public void focusGained(java.awt.event.FocusEvent evt) {
+                txtStartDateFocusGained(evt);
+            }
+            public void focusLost(java.awt.event.FocusEvent evt) {
+                txtStartDateFocusLost(evt);
+            }
+        });
+        txtStartDate.addActionListener(new java.awt.event.ActionListener() {
+            public void actionPerformed(java.awt.event.ActionEvent evt) {
+                txtStartDateActionPerformed(evt);
+            }
+        });
+
+        txtDeadline.setText("YYYY-MM-DD");
+        txtDeadline.addFocusListener(new java.awt.event.FocusAdapter() {
+            public void focusGained(java.awt.event.FocusEvent evt) {
+                txtDeadlineFocusGained(evt);
+            }
+            public void focusLost(java.awt.event.FocusEvent evt) {
+                txtDeadlineFocusLost(evt);
+            }
+        });
+        txtDeadline.addActionListener(new java.awt.event.ActionListener() {
+            public void actionPerformed(java.awt.event.ActionEvent evt) {
+                txtDeadlineActionPerformed(evt);
+            }
+        });
+
+        javax.swing.GroupLayout jPanel2Layout = new javax.swing.GroupLayout(jPanel2);
+        jPanel2.setLayout(jPanel2Layout);
+        jPanel2Layout.setHorizontalGroup(
+            jPanel2Layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
+            .addGroup(jPanel2Layout.createSequentialGroup()
+                .addGroup(jPanel2Layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
+                    .addGroup(jPanel2Layout.createSequentialGroup()
+                        .addGap(15, 15, 15)
+                        .addGroup(jPanel2Layout.createParallelGroup(javax.swing.GroupLayout.Alignment.TRAILING, false)
+                            .addGroup(jPanel2Layout.createSequentialGroup()
+                                .addGroup(jPanel2Layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
+                                    .addGroup(jPanel2Layout.createSequentialGroup()
+                                        .addGroup(jPanel2Layout.createParallelGroup(javax.swing.GroupLayout.Alignment.TRAILING)
+                                            .addComponent(jLabel_supervisor)
+                                            .addComponent(jLabel_regNo))
+                                        .addGap(18, 18, 18)
+                                        .addGroup(jPanel2Layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING, false)
+                                            .addGroup(jPanel2Layout.createSequentialGroup()
+                                                .addComponent(txtRegNo, javax.swing.GroupLayout.PREFERRED_SIZE, 174, javax.swing.GroupLayout.PREFERRED_SIZE)
+                                                .addGap(140, 140, 140)
+                                                .addComponent(txtDeadline))
+                                            .addGroup(jPanel2Layout.createSequentialGroup()
+                                                .addComponent(txtSupervisor, javax.swing.GroupLayout.PREFERRED_SIZE, 190, javax.swing.GroupLayout.PREFERRED_SIZE)
+                                                .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.RELATED)
+                                                .addComponent(jLabel3)
+                                                .addGap(118, 118, 118)
+                                                .addComponent(txtStartDate, javax.swing.GroupLayout.PREFERRED_SIZE, 91, javax.swing.GroupLayout.PREFERRED_SIZE))))
+                                    .addGroup(jPanel2Layout.createSequentialGroup()
+                                        .addComponent(jLabel_title, javax.swing.GroupLayout.PREFERRED_SIZE, 46, javax.swing.GroupLayout.PREFERRED_SIZE)
+                                        .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.UNRELATED)
+                                        .addComponent(txtTitle, javax.swing.GroupLayout.PREFERRED_SIZE, 385, javax.swing.GroupLayout.PREFERRED_SIZE)))
+                                .addGap(106, 106, 106))
+                            .addComponent(jButton_submit, javax.swing.GroupLayout.PREFERRED_SIZE, 644, javax.swing.GroupLayout.PREFERRED_SIZE)))
+                    .addGroup(javax.swing.GroupLayout.Alignment.TRAILING, jPanel2Layout.createSequentialGroup()
+                        .addGroup(jPanel2Layout.createParallelGroup(javax.swing.GroupLayout.Alignment.TRAILING)
+                            .addGroup(jPanel2Layout.createSequentialGroup()
+                                .addGap(0, 0, Short.MAX_VALUE)
+                                .addComponent(jLabel4))
+                            .addGroup(jPanel2Layout.createSequentialGroup()
+                                .addContainerGap(javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE)
+                                .addComponent(jLabel2))
+                            .addGroup(jPanel2Layout.createSequentialGroup()
+                                .addGap(30, 30, 30)
+                                .addComponent(jLabel_category)
+                                .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.UNRELATED)
+                                .addComponent(txtCategory, javax.swing.GroupLayout.PREFERRED_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.PREFERRED_SIZE)
+                                .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.RELATED, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE)
+                                .addComponent(jLabel_member)))
+                        .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.UNRELATED)
+                        .addComponent(txtMember, javax.swing.GroupLayout.PREFERRED_SIZE, 197, javax.swing.GroupLayout.PREFERRED_SIZE)))
+                .addContainerGap(javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE))
+            .addGroup(javax.swing.GroupLayout.Alignment.TRAILING, jPanel2Layout.createSequentialGroup()
+                .addContainerGap(javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE)
+                .addGroup(jPanel2Layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
+                    .addGroup(javax.swing.GroupLayout.Alignment.TRAILING, jPanel2Layout.createSequentialGroup()
+                        .addComponent(jLabel_year)
+                        .addGap(18, 18, 18)
+                        .addComponent(txtYear, javax.swing.GroupLayout.PREFERRED_SIZE, 71, javax.swing.GroupLayout.PREFERRED_SIZE)
+                        .addGap(72, 72, 72))
+                    .addGroup(javax.swing.GroupLayout.Alignment.TRAILING, jPanel2Layout.createSequentialGroup()
+                        .addComponent(jButton1)
+                        .addGap(289, 289, 289))))
+        );
+        jPanel2Layout.setVerticalGroup(
+            jPanel2Layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
+            .addGroup(jPanel2Layout.createSequentialGroup()
+                .addGap(39, 39, 39)
+                .addGroup(jPanel2Layout.createParallelGroup(javax.swing.GroupLayout.Alignment.BASELINE)
+                    .addComponent(jLabel_title)
+                    .addComponent(txtTitle, javax.swing.GroupLayout.PREFERRED_SIZE, 25, javax.swing.GroupLayout.PREFERRED_SIZE))
+                .addGroup(jPanel2Layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
+                    .addGroup(jPanel2Layout.createSequentialGroup()
+                        .addGap(30, 30, 30)
+                        .addGroup(jPanel2Layout.createParallelGroup(javax.swing.GroupLayout.Alignment.BASELINE)
+                            .addComponent(jLabel_category)
+                            .addComponent(txtCategory, javax.swing.GroupLayout.PREFERRED_SIZE, 28, javax.swing.GroupLayout.PREFERRED_SIZE)))
+                    .addGroup(jPanel2Layout.createSequentialGroup()
+                        .addGap(18, 18, 18)
+                        .addGroup(jPanel2Layout.createParallelGroup(javax.swing.GroupLayout.Alignment.BASELINE)
+                            .addComponent(txtMember, javax.swing.GroupLayout.PREFERRED_SIZE, 25, javax.swing.GroupLayout.PREFERRED_SIZE)
+                            .addComponent(jLabel_member))))
+                .addGap(18, 18, 18)
+                .addGroup(jPanel2Layout.createParallelGroup(javax.swing.GroupLayout.Alignment.BASELINE)
+                    .addComponent(txtYear, javax.swing.GroupLayout.PREFERRED_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.PREFERRED_SIZE)
+                    .addComponent(jLabel_year))
+                .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.RELATED, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE)
+                .addGroup(jPanel2Layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
+                    .addGroup(jPanel2Layout.createSequentialGroup()
+                        .addGroup(jPanel2Layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
+                            .addComponent(jLabel3, javax.swing.GroupLayout.Alignment.TRAILING)
+                            .addGroup(javax.swing.GroupLayout.Alignment.TRAILING, jPanel2Layout.createParallelGroup(javax.swing.GroupLayout.Alignment.BASELINE)
+                                .addComponent(jLabel_supervisor)
+                                .addComponent(txtSupervisor, javax.swing.GroupLayout.PREFERRED_SIZE, 25, javax.swing.GroupLayout.PREFERRED_SIZE)))
+                        .addGap(27, 27, 27)
+                        .addGroup(jPanel2Layout.createParallelGroup(javax.swing.GroupLayout.Alignment.BASELINE)
+                            .addComponent(txtRegNo, javax.swing.GroupLayout.PREFERRED_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.PREFERRED_SIZE)
+                            .addComponent(jLabel_regNo)))
+                    .addGroup(jPanel2Layout.createSequentialGroup()
+                        .addGap(25, 25, 25)
+                        .addGroup(jPanel2Layout.createParallelGroup(javax.swing.GroupLayout.Alignment.BASELINE)
+                            .addComponent(jLabel2)
+                            .addComponent(txtStartDate, javax.swing.GroupLayout.PREFERRED_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.PREFERRED_SIZE))
+                        .addGap(18, 18, 18)
+                        .addGroup(jPanel2Layout.createParallelGroup(javax.swing.GroupLayout.Alignment.BASELINE)
+                            .addComponent(jLabel4)
+                            .addComponent(txtDeadline, javax.swing.GroupLayout.PREFERRED_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.PREFERRED_SIZE))))
+                .addGap(54, 54, 54)
+                .addComponent(jButton_submit)
+                .addGap(18, 18, 18)
+                .addComponent(jButton1)
+                .addGap(24, 24, 24))
+        );
+
+        jLabel1.setFont(new java.awt.Font("Segoe UI", 3, 36)); // NOI18N
+        jLabel1.setForeground(new java.awt.Color(255, 255, 255));
+        jLabel1.setHorizontalAlignment(javax.swing.SwingConstants.CENTER);
+        jLabel1.setText("Create a New Project");
+
+        javax.swing.GroupLayout jPanel1Layout = new javax.swing.GroupLayout(jPanel1);
+        jPanel1.setLayout(jPanel1Layout);
+        jPanel1Layout.setHorizontalGroup(
+            jPanel1Layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
+            .addComponent(jPanel2, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE)
+            .addGroup(jPanel1Layout.createSequentialGroup()
+                .addGap(172, 172, 172)
+                .addComponent(jLabel1)
+                .addContainerGap(javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE))
+        );
+        jPanel1Layout.setVerticalGroup(
+            jPanel1Layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
+            .addGroup(javax.swing.GroupLayout.Alignment.TRAILING, jPanel1Layout.createSequentialGroup()
+                .addContainerGap(31, Short.MAX_VALUE)
+                .addComponent(jLabel1)
+                .addGap(18, 18, 18)
+                .addComponent(jPanel2, javax.swing.GroupLayout.PREFERRED_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.PREFERRED_SIZE))
+        );
+
+        javax.swing.GroupLayout layout = new javax.swing.GroupLayout(getContentPane());
+        getContentPane().setLayout(layout);
+        layout.setHorizontalGroup(
+            layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
+            .addComponent(jPanel1, javax.swing.GroupLayout.Alignment.TRAILING, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE)
+        );
+        layout.setVerticalGroup(
+            layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
+            .addComponent(jPanel1, javax.swing.GroupLayout.PREFERRED_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.PREFERRED_SIZE)
+        );
+
+        pack();
+    }// </editor-fold>                        
+
+    private void jButton1ActionPerformed(java.awt.event.ActionEvent evt) {                                         
+
+    }                                        
+
+    private void jButton_submitActionPerformed(java.awt.event.ActionEvent evt) {                                               
+       
+                         
+    }                                              
+
+    private void txtStartDateFocusGained(java.awt.event.FocusEvent evt) {                                         
+                                                
+    // clear text if text = 'YYYY-MM-DD'
+    if (txtStartDate.getText().trim().equals("YYYY-MM-DD")) {
+        txtStartDate.setText("");  // Clear text
+        txtStartDate.setForeground(Color.black);  // Set text color to black
+    }
+
+
+    }                                        
+
+    private void txtStartDateFocusLost(java.awt.event.FocusEvent evt) {                                       
+                                            
+    // Restore placeholder text if the field is empty
+    if (txtStartDate.getText().trim().isEmpty()) {
+        txtStartDate.setText("YYYY-MM-DD");
+        txtStartDate.setForeground(Color.gray);  // Set text color to gray
+    }
+
+
+    }                                      
+
+    private void txtDeadlineFocusGained(java.awt.event.FocusEvent evt) {                                        
+                                                    
+    // clear text if text = 'YYYY-MM-DD'
+    if (txtDeadline.getText().trim().equals("YYYY-MM-DD")) {
+        txtDeadline.setText("");  // Clear text
+        txtDeadline.setForeground(Color.black);  // Set text color to black
+    }
+
+    }                                       
+
+    private void txtDeadlineFocusLost(java.awt.event.FocusEvent evt) {                                      
+       // Restore placeholder text if the field is empty
+    if (txtDeadline.getText().trim().isEmpty()) {
+        txtDeadline.setText("YYYY-MM-DD");
+        txtDeadline.setForeground(Color.gray);  // Set text color to gray
+    }
+
+    }                                     
+
+    private void txtStartDateActionPerformed(java.awt.event.ActionEvent evt) {                                             
+        
+    }                                            
+
+    private void txtDeadlineActionPerformed(java.awt.event.ActionEvent evt) {                                            
+        
+    }                                           
+public static void main(String[] args) {
+        // Set the Look and Feel for the UI
+        try {
+            UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        // Create and display the form
+        new CreateProject_Form().setVisible(true);
+    }
+
+
+    // Variables declaration - do not modify                     
+    private javax.swing.JButton jButton1;
+    private javax.swing.JButton jButton_submit;
+    private javax.swing.JLabel jLabel1;
+    private javax.swing.JLabel jLabel2;
+    private javax.swing.JLabel jLabel3;
+    private javax.swing.JLabel jLabel4;
+    private javax.swing.JLabel jLabel_category;
+    private javax.swing.JLabel jLabel_member;
+    private javax.swing.JLabel jLabel_regNo;
+    private javax.swing.JLabel jLabel_supervisor;
+    private javax.swing.JLabel jLabel_title;
+    private javax.swing.JLabel jLabel_year;
+    private javax.swing.JPanel jPanel1;
+    private javax.swing.JPanel jPanel2;
+    private javax.swing.JComboBox<String> txtCategory;
+    private javax.swing.JTextField txtDeadline;
+    private javax.swing.JTextField txtMember;
+    private javax.swing.JTextField txtRegNo;
+    private javax.swing.JTextField txtStartDate;
+    private javax.swing.JTextField txtSupervisor;
+    private javax.swing.JTextField txtTitle;
+    private javax.swing.JTextField txtYear;
+    // End of variables declaration           
